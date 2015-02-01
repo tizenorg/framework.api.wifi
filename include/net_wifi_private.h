@@ -20,8 +20,13 @@
 #include <dlog.h>
 #include <network-cm-intf.h>
 #include <network-wifi-intf.h>
+#include <system_info.h>
 
 #include "wifi.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
 
 #undef LOG_TAG
 #define LOG_TAG "CAPI_NETWORK_WIFI"
@@ -29,6 +34,22 @@
 #define WIFI_INFO	1
 #define WIFI_ERROR	2
 #define WIFI_WARN	3
+
+#define WIFI_FEATURE	"http://tizen.org/feature/network.wifi"
+
+#define CHECK_FEATURE_SUPPORTED(feature_name) \
+	do { \
+		bool feature_supported = FALSE; \
+		if (!system_info_get_platform_bool(feature_name, &feature_supported)) { \
+			if (feature_supported == FALSE) { \
+				LOGE("%s feature is disabled", feature_name); \
+				return WIFI_ERROR_NOT_SUPPORTED; \
+			} \
+		} else { \
+			LOGE("Error - Feature getting from System Info"); \
+			return WIFI_ERROR_OPERATION_FAILED; \
+		} \
+	} while(0)
 
 #define WIFI_LOG(log_level, format, args...) \
 	do { \
@@ -44,14 +65,25 @@
 		} \
 	} while(0)
 
-#ifdef __cplusplus
-extern "C" {
-#endif /* __cplusplus */
+#define SECURE_WIFI_LOG(log_level, format, args...) \
+	do { \
+		switch (log_level) { \
+		case WIFI_ERROR: \
+			SECURE_LOGE(format, ## args); \
+			break; \
+		case WIFI_WARN: \
+			SECURE_LOGW(format, ## args); \
+			break; \
+		default: \
+			SECURE_LOGI(format, ## args); \
+		} \
+	} while(0)
 
+bool _wifi_is_init(void);
 
-bool _wifi_libnet_init(void);
+int _wifi_libnet_init(void);
 bool _wifi_libnet_deinit(void);
-int _wifi_activate(wifi_activated_cb callback, void *user_data);
+int _wifi_activate(wifi_activated_cb callback, gboolean wifi_picker_test, void *user_data);
 int _wifi_deactivate(wifi_deactivated_cb callback, void *user_data);
 
 bool _wifi_libnet_check_ap_validity(wifi_ap_h ap_h);
@@ -59,19 +91,19 @@ void _wifi_libnet_add_to_ap_list(wifi_ap_h ap_h);
 void _wifi_libnet_remove_from_ap_list(wifi_ap_h ap_h);
 bool _wifi_libnet_check_profile_name_validity(const char *profile_name);
 
-bool _wifi_libnet_get_wifi_device_state(wifi_device_state_e *device_state);
-bool _wifi_libnet_get_wifi_state(wifi_connection_state_e* connection_state);
+int _wifi_libnet_get_wifi_device_state(wifi_device_state_e *device_state);
+int _wifi_libnet_get_wifi_state(wifi_connection_state_e* connection_state);
 int _wifi_libnet_get_intf_name(char** name);
 int _wifi_libnet_scan_request(wifi_scan_finished_cb callback, void *user_data);
-int _wifi_libnet_scan_hidden_ap(const char *essid,
-					wifi_scan_finished_cb callback, void *user_data);
 int _wifi_libnet_get_connected_profile(wifi_ap_h *ap);
-bool _wifi_libnet_foreach_found_aps(wifi_found_ap_cb callback, void *user_data);
-bool _wifi_libnet_foreach_found_hidden_aps(wifi_found_ap_cb callback, void *user_data);
+int _wifi_libnet_foreach_found_aps(wifi_found_ap_cb callback, void *user_data);
 
 int _wifi_libnet_open_profile(wifi_ap_h ap_h, wifi_connected_cb callback, void *user_data);
 int _wifi_libnet_close_profile(wifi_ap_h ap_h, wifi_disconnected_cb callback, void *user_data);
-int _wifi_libnet_connect_with_wps(wifi_ap_h ap, wifi_connected_cb callback, void *user_data);
+int _wifi_libnet_connect_with_wps_pbc(wifi_ap_h ap,
+		wifi_connected_cb callback, void *user_data);
+int _wifi_libnet_connect_with_wps_pin(wifi_ap_h ap, const char *pin,
+		wifi_connected_cb callback, void *user_data);
 int _wifi_libnet_forget_ap(wifi_ap_h ap);
 
 int _wifi_set_power_on_off_cb(wifi_device_state_changed_cb callback, void *user_data);
@@ -83,6 +115,10 @@ int _wifi_unset_connection_state_cb();
 
 int _wifi_update_ap_info(net_profile_info_t *ap_info);
 wifi_connection_state_e _wifi_convert_to_ap_state(net_state_type_t state);
+
+guint _wifi_callback_add(GSourceFunc func, gpointer user_data);
+void _wifi_callback_cleanup(void);
+
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
