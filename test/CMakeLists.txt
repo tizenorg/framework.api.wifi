@@ -1,7 +1,12 @@
+PROJECT(wifi_test C)
+
 SET(fw_test "${fw_name}-test")
 
+SET(dependents "capi-base-common glib-2.0 network")
+SET(pc_dependents "capi-base-common")
+
 INCLUDE(FindPkgConfig)
-pkg_check_modules(${fw_test} REQUIRED glib-2.0)
+pkg_check_modules(${fw_test} REQUIRED ${dependents})
 FOREACH(flag ${${fw_test}_CFLAGS})
     SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
 ENDFOREACH(flag)
@@ -15,3 +20,5 @@ FOREACH(src ${sources})
     ADD_EXECUTABLE(${src_name} ${src})
     TARGET_LINK_LIBRARIES(${src_name} ${fw_name} ${${fw_test}_LDFLAGS})
 ENDFOREACH()
+
+INSTALL(TARGETS wifi_test RUNTIME DESTINATION bin/)
