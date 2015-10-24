@@ -18,8 +18,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <vconf/vconf.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <glib.h>
 
 #include "net_wifi_private.h"
+
+#define WIFI_MAC_ADD_LENGTH	17
+#define WIFI_MAC_ADD_PATH		"/sys/class/net/wlan0/address"
 
 static __thread wifi_rssi_level_changed_cb rssi_level_changed_cb = NULL;
 static __thread void *rssi_level_changed_user_data = NULL;
@@ -70,6 +76,8 @@ EXPORT_API int wifi_initialize(void)
 		return WIFI_ERROR_OPERATION_FAILED;
 	}
 
+	_wifi_dbus_init();
+
 	WIFI_LOG(WIFI_INFO, "Wi-Fi successfully initialized");
 
 	return WIFI_ERROR_NONE;
@@ -91,6 +99,8 @@ EXPORT_API int wifi_deinitialize(void)
 
 	wifi_unset_rssi_level_changed_cb();
 	_wifi_callback_cleanup();
+
+	_wifi_dbus_deinit();
 
 	WIFI_LOG(WIFI_INFO, "Wi-Fi successfully de-initialized");
 
@@ -184,12 +194,44 @@ EXPORT_API int wifi_get_mac_address(char** mac_address)
 		return WIFI_ERROR_INVALID_PARAMETER;
 	}
 
-	*mac_address = vconf_get_str(VCONFKEY_WIFI_BSSID_ADDRESS);
+#if defined TIZEN_TV
+	FILE *fp = NULL;
+	char buf[WIFI_MAC_ADD_LENGTH + 1];
+	if (0 == access(WIFI_MAC_ADD_PATH, F_OK))
+		fp = fopen(WIFI_MAC_ADD_PATH, "r");
 
-	if (*mac_address == NULL) {
-		WIFI_LOG(WIFI_ERROR, "vconf_get_str Failed");
+	if (fp == NULL) {
+		WIFI_LOG(WIFI_ERROR, "Failed to open file"
+				" %s\n", WIFI_MAC_ADD_PATH);
 		return WIFI_ERROR_OPERATION_FAILED;
 	}
+
+	if (fgets(buf, sizeof(buf), fp) == NULL) {
+		WIFI_LOG(WIFI_ERROR, "Failed to get MAC"
+				" info from %s\n", WIFI_MAC_ADD_PATH);
+		fclose(fp);
+		return WIFI_ERROR_OPERATION_FAILED;
+	}
+
+	WIFI_LOG(WIFI_INFO, "%s : %s\n", WIFI_MAC_ADD_PATH, buf);
+
+	*mac_address = (char *)g_try_malloc0(WIFI_MAC_ADD_LENGTH + 1);
+	if (*mac_address == NULL) {
+		WIFI_LOG(WIFI_ERROR, "malloc() failed");
+		fclose(fp);
+		return WIFI_ERROR_OUT_OF_MEMORY;
+	}
+	g_strlcpy(*mac_address, buf, WIFI_MAC_ADD_LENGTH + 1);
+	fclose(fp);
+#else
+	*mac_address = vconf_get_str(VCONFKEY_WIFI_BSSID_ADDRESS);
+
+	if(*mac_address == NULL) {
+		WIFI_LOG(WIFI_ERROR, "Failed to get vconf"
+			" from %s", VCONFKEY_WIFI_BSSID_ADDRESS);
+		return WIFI_ERROR_OPERATION_FAILED;
+	}
+#endif
 
 	return WIFI_ERROR_NONE;
 }
@@ -229,6 +271,32 @@ EXPORT_API int wifi_scan(wifi_scan_finished_cb callback, void* user_data)
 	return rv;
 }
 
+EXPORT_API int wifi_scan_specific_ap(const char* essid, wifi_scan_finished_cb callback, void* user_data)
+{
+	int rv;
+
+	CHECK_FEATURE_SUPPORTED(WIFI_FEATURE);
+
+	if (essid == NULL || callback == NULL) {
+		WIFI_LOG(WIFI_ERROR, "Invalid parameter");
+		return WIFI_ERROR_INVALID_PARAMETER;
+	}
+
+	if (_wifi_is_init() == false) {
+		WIFI_LOG(WIFI_ERROR, "Not initialized");
+
+		return WIFI_ERROR_INVALID_OPERATION;
+	}
+
+	rv = _wifi_libnet_scan_specific_ap(essid, callback, user_data);
+	if (rv != WIFI_ERROR_NONE)
+		WIFI_LOG(WIFI_ERROR, "Wi-Fi hidden scan failed.\n");
+
+	return rv;
+}
+
+
+
 EXPORT_API int wifi_get_connected_ap(wifi_ap_h* ap)
 {
 	int rv;
@@ -256,6 +324,18 @@ EXPORT_API int wifi_foreach_found_aps(wifi_found_ap_cb callback, void* user_data
 	}
 
 	return _wifi_libnet_foreach_found_aps(callback, user_data);
+}
+
+EXPORT_API int wifi_foreach_found_specific_aps(wifi_found_ap_cb callback, void* user_data)
+{
+	CHECK_FEATURE_SUPPORTED(WIFI_FEATURE);
+
+	if (callback == NULL) {
+		WIFI_LOG(WIFI_ERROR, "Invalid parameter");
+		return WIFI_ERROR_INVALID_PARAMETER;
+	}
+
+	return _wifi_libnet_foreach_found_specific_aps(callback, user_data);
 }
 
 EXPORT_API int wifi_connect(wifi_ap_h ap, wifi_connected_cb callback, void* user_data)

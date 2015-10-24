@@ -648,9 +648,12 @@ EXPORT_API int wifi_ap_get_subnet_mask(wifi_ap_h ap, wifi_address_family_e addre
 			address_family);
 	else {
 		prefixlen = g_try_malloc0(MAX_PREFIX_LENGTH);
-		snprintf(prefixlen, MAX_PREFIX_LENGTH, "%d",
-			profile_info->ProfileInfo.Wlan.net_info.PrefixLen6);
-		*subnet_mask =  prefixlen;
+		if (prefixlen != NULL) {
+			snprintf(prefixlen, MAX_PREFIX_LENGTH, "%d",
+				profile_info->ProfileInfo.Wlan.net_info.PrefixLen6);
+			*subnet_mask = prefixlen;
+		} else
+			*subnet_mask = NULL;
 	}
 
 	if (*subnet_mask == NULL)

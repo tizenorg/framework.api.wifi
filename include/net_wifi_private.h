@@ -23,6 +23,7 @@
 #include <system_info.h>
 
 #include "wifi.h"
+#include "wifi_dbus_private.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,19 +38,16 @@ extern "C" {
 
 #define WIFI_FEATURE	"http://tizen.org/feature/network.wifi"
 
+#if !defined TIZEN_TV
 #define CHECK_FEATURE_SUPPORTED(feature_name) \
 	do { \
-		bool feature_supported = FALSE; \
-		if (!system_info_get_platform_bool(feature_name, &feature_supported)) { \
-			if (feature_supported == FALSE) { \
-				LOGE("%s feature is disabled", feature_name); \
-				return WIFI_ERROR_NOT_SUPPORTED; \
-			} \
-		} else { \
-			LOGE("Error - Feature getting from System Info"); \
-			return WIFI_ERROR_OPERATION_FAILED; \
-		} \
+		int rv = _wifi_check_feature_supported(feature_name); \
+		if( rv != WIFI_ERROR_NONE ) \
+			return rv; \
 	} while(0)
+#else
+#define CHECK_FEATURE_SUPPORTED(feature_name)
+#endif
 
 #define WIFI_LOG(log_level, format, args...) \
 	do { \
@@ -95,8 +93,10 @@ int _wifi_libnet_get_wifi_device_state(wifi_device_state_e *device_state);
 int _wifi_libnet_get_wifi_state(wifi_connection_state_e* connection_state);
 int _wifi_libnet_get_intf_name(char** name);
 int _wifi_libnet_scan_request(wifi_scan_finished_cb callback, void *user_data);
+int _wifi_libnet_scan_specific_ap(const char *essid, wifi_scan_finished_cb callback, void *user_data);
 int _wifi_libnet_get_connected_profile(wifi_ap_h *ap);
 int _wifi_libnet_foreach_found_aps(wifi_found_ap_cb callback, void *user_data);
+int _wifi_libnet_foreach_found_specific_aps(wifi_found_ap_cb callback, void *user_data);
 
 int _wifi_libnet_open_profile(wifi_ap_h ap_h, wifi_connected_cb callback, void *user_data);
 int _wifi_libnet_close_profile(wifi_ap_h ap_h, wifi_disconnected_cb callback, void *user_data);
@@ -118,6 +118,12 @@ wifi_connection_state_e _wifi_convert_to_ap_state(net_state_type_t state);
 
 guint _wifi_callback_add(GSourceFunc func, gpointer user_data);
 void _wifi_callback_cleanup(void);
+
+int _wifi_check_feature_supported(const char *feature_name);
+
+int        _wifi_dbus_init(void);
+int        _wifi_dbus_deinit(void);
+wifi_dbus *_wifi_get_dbus_handle(void);
 
 #ifdef __cplusplus
 }

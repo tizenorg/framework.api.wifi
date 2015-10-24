@@ -91,6 +91,9 @@ static void __test_bg_scan_completed_callback(wifi_error_e error_code, void* use
 
 static void __test_scan_request_callback(wifi_error_e error_code, void* user_data)
 {
+	if(user_data != NULL)
+		printf("user_data : %s\n", (char *)user_data);
+
 	printf("Scan Completed from scan request, error code : %s\n",
 			__test_convert_error_to_string(error_code));
 }
@@ -133,7 +136,7 @@ static void __test_activated_callback(wifi_error_e result, void* user_data)
 	if (result == WIFI_ERROR_NONE)
 		printf("Wi-Fi Activation Succeeded\n");
 	else
-		printf("Wi-Fi Activation Failed! error : %s", __test_convert_error_to_string(result));
+		printf("Wi-Fi Activation Failed! error : %s\n", __test_convert_error_to_string(result));
 }
 
 static void __test_deactivated_callback(wifi_error_e result, void* user_data)
@@ -141,7 +144,7 @@ static void __test_deactivated_callback(wifi_error_e result, void* user_data)
 	if (result == WIFI_ERROR_NONE)
 		printf("Wi-Fi Deactivation Succeeded\n");
 	else
-		printf("Wi-Fi Deactivation Failed! error : %s", __test_convert_error_to_string(result));
+		printf("Wi-Fi Deactivation Failed! error : %s\n", __test_convert_error_to_string(result));
 }
 
 static void __test_connected_callback(wifi_error_e result, void* user_data)
@@ -149,7 +152,7 @@ static void __test_connected_callback(wifi_error_e result, void* user_data)
 	if (result == WIFI_ERROR_NONE)
 		printf("Wi-Fi Connection Succeeded\n");
 	else
-		printf("Wi-Fi Connection Failed! error : %s", __test_convert_error_to_string(result));
+		printf("Wi-Fi Connection Failed! error : %s\n", __test_convert_error_to_string(result));
 }
 
 static void __test_disconnected_callback(wifi_error_e result, void* user_data)
@@ -157,7 +160,7 @@ static void __test_disconnected_callback(wifi_error_e result, void* user_data)
 	if (result == WIFI_ERROR_NONE)
 		printf("Wi-Fi Disconnection Succeeded\n");
 	else
-		printf("Wi-Fi Disconnection Failed! error : %s", __test_convert_error_to_string(result));
+		printf("Wi-Fi Disconnection Failed! error : %s\n", __test_convert_error_to_string(result));
 }
 
 static void __test_rssi_level_callback(wifi_rssi_level_e rssi_level, void* user_data)
@@ -268,7 +271,27 @@ static bool __test_found_connect_wps_callback(wifi_ap_h ap, void *user_data)
 	}
 
 	if (strstr(ap_name, ap_name_part) != NULL) {
-		rv = wifi_connect(ap, __test_connected_callback, NULL);
+		int user_sel;
+		char pin[32] = {0,};
+
+		printf("%s - Input WPS method (1:PBC, 2:PIN) :\n", ap_name);
+		rv = scanf("%9d", &user_sel);
+
+		switch (user_sel) {
+		case 1:
+			rv = wifi_connect_by_wps_pbc(ap, __test_connected_callback, NULL);
+			break;
+		case 2:
+			printf("Input PIN code :\n");
+			rv = scanf("%31s", pin);
+			rv = wifi_connect_by_wps_pin(ap, pin, __test_connected_callback, NULL);
+			break;
+		default:
+			printf("Invalid input!\n");
+			g_free(ap_name);
+			return false;
+		}
+
 		if (rv != WIFI_ERROR_NONE)
 			printf("Fail to connection request [%s] : %s\n", ap_name, __test_convert_error_to_string(rv));
 		else
@@ -804,6 +827,134 @@ static bool __test_found_print_ap_info_callback(wifi_ap_h ap, void *user_data)
 	return true;
 }
 
+static bool _test_config_list_cb(const wifi_config_h config, void *user_data)
+{
+	gchar *name = NULL;
+	wifi_security_type_e security_type;
+
+	wifi_config_get_name(config, &name);
+	wifi_config_get_security_type(config, &security_type);
+
+	printf("Name[%s] ", name);
+	printf("Security type[%d] ", security_type);
+	if (security_type == WIFI_SECURITY_TYPE_EAP) {
+		wifi_eap_type_e eap_type;
+		wifi_eap_auth_type_e eap_auth_type;
+		wifi_config_get_eap_type(config, &eap_type);
+		printf("Eap type[%d] ", eap_type);
+		wifi_config_get_eap_auth_type(config, &eap_auth_type);
+		printf("Eap auth type[%d]", eap_auth_type);
+	}
+	printf("\n");
+
+	g_free(name);
+
+	return true;
+}
+
+static bool __test_found_specific_aps_callback(wifi_ap_h ap, void *user_data)
+{
+	printf("Found specific ap Completed\n");
+
+	int rv;
+	char *ap_name = NULL;
+	wifi_security_type_e security_type = WIFI_SECURITY_TYPE_NONE;
+
+	rv = wifi_ap_get_essid(ap, &ap_name);
+	if (rv != WIFI_ERROR_NONE) {
+		printf("Fail to get AP name [%s]\n", __test_convert_error_to_string(rv));
+		return -1;
+	}
+	printf("[AP name] : %s\n", ap_name);
+
+	rv = wifi_ap_get_security_type(ap, &security_type);
+	if (rv == WIFI_ERROR_NONE)
+		printf("[Security type] : %d\n", security_type);
+	else {
+		printf("Fail to get Security type\n");
+		g_free(ap_name);
+		return false;
+	}
+
+	switch(security_type) {
+	case WIFI_SECURITY_TYPE_WEP :
+	case WIFI_SECURITY_TYPE_WPA_PSK :
+	case WIFI_SECURITY_TYPE_WPA2_PSK :
+		{
+			char passphrase[100];
+			printf("Input passphrase for %s : ", ap_name);
+			rv = scanf("%99s", passphrase);
+
+			rv = wifi_ap_set_passphrase(ap, passphrase);
+			if (rv != WIFI_ERROR_NONE) {
+				printf("Fail to set passphrase : %s\n", __test_convert_error_to_string(rv));
+				g_free(ap_name);
+				return false;
+			}
+		}
+		break;
+	case WIFI_SECURITY_TYPE_EAP :
+		{
+			char input_str1[100];
+			printf("Input user name for %s : ", ap_name);
+			rv = scanf("%99s", input_str1);
+
+			char input_str2[100];
+			printf("Input password for %s : ", ap_name);
+			rv = scanf("%99s", input_str2);
+
+			rv = wifi_ap_set_eap_passphrase(ap, input_str1, input_str2);
+			if (rv != WIFI_ERROR_NONE) {
+				printf("Fail to set eap passphrase : %s\n", __test_convert_error_to_string(rv));
+				g_free(ap_name);
+				return false;
+			}
+
+			char *inputed_name = NULL;
+			bool is_pass_set;
+			rv = wifi_ap_get_eap_passphrase(ap, &inputed_name, &is_pass_set);
+			if (rv != WIFI_ERROR_NONE) {
+				printf("Fail to get eap passphrase : %s\n", __test_convert_error_to_string(rv));
+				g_free(ap_name);
+				return false;
+			}
+
+			printf("name : %s, is password set : %s\n", inputed_name, is_pass_set ? "TRUE" : "FALSE");
+			g_free(inputed_name);
+		}
+		break;
+	case WIFI_SECURITY_TYPE_NONE :
+	default :
+		break;
+	}
+
+	rv = wifi_connect(ap, __test_connected_callback, NULL);
+	if (rv != WIFI_ERROR_NONE)
+		printf("Fail to connection request [%s] : %s\n", ap_name, __test_convert_error_to_string(rv));
+	else
+		printf("Success to connection request [%s]\n", ap_name);
+
+	g_free(ap_name);
+	return true;
+}
+
+static void __test_scan_specific_ap_callback(wifi_error_e error_code, void* user_data)
+{
+	int rv;
+
+	printf("Specific scan Completed from scan request, error code : %s\n",
+			__test_convert_error_to_string(error_code));
+
+	if (error_code != WIFI_ERROR_NONE)
+		return;
+
+	rv = wifi_foreach_found_specific_aps(__test_found_specific_aps_callback, user_data);
+	if (rv != WIFI_ERROR_NONE) {
+		printf("Fail to get specific AP(can't get AP list) [%s]\n", __test_convert_error_to_string(rv));
+		return;
+	}
+}
+
 int test_wifi_init(void)
 {
 	int rv = wifi_initialize();
@@ -821,7 +972,7 @@ int test_wifi_init(void)
 	printf("Wifi init succeeded\n");
 	return 1;
 }
- 
+
 int  test_wifi_deinit(void)
 {
 	int rv = 0;
@@ -1035,6 +1186,27 @@ int test_connect_ap(void)
 	return 1;
 }
 
+int test_connect_specific_ap(void)
+{
+	int rv;
+	char ap_name[33];
+
+	printf("Input a part of specific AP name to connect : ");
+	rv = scanf("%32s", ap_name);
+	if (rv <= 0)
+		return -1;
+
+	rv = wifi_scan_specific_ap(ap_name, __test_scan_specific_ap_callback, NULL);
+
+	if (rv != WIFI_ERROR_NONE) {
+		printf("Scan request failed [%s]\n", __test_convert_error_to_string(rv));
+		return -1;
+	}
+
+	printf("Scan specific AP request succeeded\n");
+	return 1;
+}
+
 int test_disconnect_ap(void)
 {
 	int rv = 0;
@@ -1202,9 +1374,164 @@ int test_get_ap_info(void)
 	return 1;
 }
 
+int test_load_configuration(void)
+{
+	int rv;
+
+	rv = wifi_config_foreach_configuration(_test_config_list_cb, NULL);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	return 1;
+}
+
+int test_save_configuration(void)
+{
+	int rv;
+	char name[33] = { 0, };
+	char passphrase[100] = { 0, };
+	int type = 0;
+	wifi_config_h config;
+
+	printf("Input AP configuration\n");
+	printf("Name : ");
+	rv = scanf("%32s", name);
+	if (rv <= 0)
+		return -1;
+
+	printf("Passphrase : ");
+	rv = scanf("%99s", passphrase);
+	if (rv <= 0)
+		return -1;
+
+	printf("Security type(None(0), WEP(1), WPA-PSK(2), EAP(4) : ");
+	rv = scanf("%d", &type);
+	if (rv <= 0)
+		return -1;
+
+	rv = wifi_config_create(name, passphrase, type, &config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_save_configuration(config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_destroy(config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	return 1;
+}
+
+int test_set_configuration_proxy_and_hidden(void)
+{
+	int rv;
+	char name[33] = { 0, };
+	char passphrase[100] = { 0, };
+	int type = 0;
+	char proxy[100] = { 0, };
+	int hidden = 0;
+	wifi_config_h config;
+
+	printf("Input AP configuration\n");
+	printf("Name : ");
+	rv = scanf("%32s", name);
+	if (rv <= 0)
+		return -1;
+
+	printf("Passphrase : ");
+	rv = scanf("%99s", passphrase);
+	if (rv <= 0)
+		return -1;
+
+	printf("Security type(None(0), WEP(1), WPA-PSK(2), EAP(4) : ");
+	rv = scanf("%d", &type);
+	if (rv <= 0)
+		return -1;
+
+	printf("Proxy(server:port) : ");
+	rv = scanf("%99s", proxy);
+	if (rv <= 0)
+		return -1;
+
+	printf("Hidden(1:Hidden) : ");
+	rv = scanf("%d", &hidden);
+	if (rv <= 0)
+		return -1;
+
+	rv = wifi_config_create(name, passphrase, type, &config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_save_configuration(config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_set_proxy_address(config, WIFI_ADDRESS_FAMILY_IPV4, proxy);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	if (hidden == 1)
+		rv = wifi_config_set_hidden_ap_property(config, TRUE);
+	else
+		rv = wifi_config_set_hidden_ap_property(config, FALSE);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_destroy(config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	return 1;
+}
+
+int test_set_eap_configuration(void)
+{
+	int rv;
+	char name[33] = { 0, };
+	char passphrase[100] = { 0, };
+	int type = WIFI_SECURITY_TYPE_EAP;
+	wifi_config_h config;
+
+	printf("Input EAP configuration\n");
+	printf("Name : ");
+	rv = scanf("%32s", name);
+	if (rv <= 0)
+		return -1;
+
+	printf("Passphrase : ");
+	rv = scanf("%99s", passphrase);
+	if (rv <= 0)
+		return -1;
+
+	rv = wifi_config_create(name, passphrase, type, &config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_save_configuration(config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_set_eap_type(config, WIFI_EAP_TYPE_TLS);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_set_eap_auth_type(config, WIFI_EAP_AUTH_TYPE_MD5);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	rv = wifi_config_destroy(config);
+	if (rv != WIFI_ERROR_NONE)
+		return -1;
+
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	GMainLoop *mainloop;
+	g_type_init();
 	mainloop = g_main_loop_new (NULL, FALSE);
 
 	GIOChannel *channel = g_io_channel_unix_new(0);
@@ -1257,6 +1584,11 @@ gboolean test_thread(GIOChannel *source, GIOCondition condition, gpointer data)
 		printf("h 	- Set IP method type\n");
 		printf("i 	- Set Proxy method type\n");
 		printf("j 	- Get Ap info\n");
+		printf("k 	- Connect Specific AP\n");
+		printf("l 	- Load configuration\n");
+		printf("m 	- Save configuration\n");
+		printf("n 	- Set configuration proxy and hidden\n");
+		printf("o       - Set EAP configuration\n");
 		printf("0 	- Exit \n");
 
 		printf("ENTER  - Show options menu.......\n");
@@ -1320,6 +1652,22 @@ gboolean test_thread(GIOChannel *source, GIOCondition condition, gpointer data)
 	case 'j':
 		rv = test_get_ap_info();
 		break;
+	case 'k':
+		rv = test_connect_specific_ap();
+		break;
+	case 'l':
+		rv = test_load_configuration();
+		break;
+	case 'm':
+		rv = test_save_configuration();
+		break;
+	case 'n':
+		rv = test_set_configuration_proxy_and_hidden();
+		break;
+	case 'o':
+		rv = test_set_eap_configuration();
+		break;
+
 	default:
 		break;
 	}

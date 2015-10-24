@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "wifi_dbus_private.h"
 #include "net_wifi_private.h"
 
 static __thread bool is_init = false;
@@ -31,6 +32,8 @@ struct _wifi_cb_s {
 	void *bg_scan_user_data;
 	wifi_scan_finished_cb scan_request_cb;
 	void *scan_request_user_data;
+	wifi_scan_finished_cb specific_scan_cb;
+	void *specific_scan_user_data;
 	wifi_connection_state_changed_cb connection_state_cb;
 	void *connection_state_user_data;
 	wifi_activated_cb activated_cb;
@@ -61,7 +64,13 @@ struct managed_idle_data {
 
 static __thread struct _wifi_cb_s wifi_callbacks = { 0, };
 static __thread struct _profile_list_s profile_iterator = { 0, NULL };
+static __thread struct _profile_list_s specific_profile_iterator = {0, NULL};
+static __thread char specific_profile_essid[NET_WLAN_ESSID_LEN + 1] = { 0, };
+static __thread bool is_feature_checked = false;
+static __thread bool feature_supported = false;
 static __thread GSList *managed_idler_list = NULL;
+
+wifi_dbus *g_dbus_h = NULL;
 
 bool _wifi_is_init(void)
 {
@@ -192,6 +201,37 @@ static int __libnet_update_profile_iterator(void)
 	profile_iterator.profiles = wifi_profiles.profiles;
 
 	return WIFI_ERROR_NONE;
+}
+
+static void __libnet_update_specific_profile_iterator(GSList *ap_list)
+{
+    int count=0;
+    GSList *list = ap_list;
+
+    for (count = 0; list; list = list->next) {
+		count++;
+    }
+
+	if (count == 0) {
+		WIFI_LOG(WIFI_INFO, "No hidden AP found\n");
+		return;
+	}
+
+	specific_profile_iterator.count = count;
+	specific_profile_iterator.profiles = g_try_new0(net_profile_info_t, count);
+
+	list = ap_list;
+	for (count = 0; list; list = list->next) {
+		struct ssid_scan_bss_info_t *ap = (struct ssid_scan_bss_info_t *)list->data;
+		net_profile_info_t *profile = &specific_profile_iterator.profiles[count];
+
+		g_strlcpy(profile->ProfileInfo.Wlan.essid, ap->ssid, NET_WLAN_ESSID_LEN+1);
+		profile->ProfileInfo.Wlan.security_info.sec_mode = ap->security;
+
+		count++;
+	}
+
+	WIFI_LOG(WIFI_INFO, "Specific AP count : %d\n", count);
 }
 
 static void __libnet_convert_profile_info_to_wifi_info(net_wifi_connection_info_t *wifi_info,
@@ -412,6 +452,27 @@ static gboolean __scan_request_cb_idle(gpointer data)
 	return FALSE;
 }
 
+static void __libnet_set_specific_scan_cb(wifi_scan_finished_cb user_cb, void *user_data)
+{
+	if (user_cb != NULL) {
+		wifi_callbacks.specific_scan_cb = user_cb;
+		wifi_callbacks.specific_scan_user_data = user_data;
+	}
+}
+
+static gboolean __specific_scan_cb_idle(gpointer data)
+{
+	wifi_error_e error_code = (wifi_error_e)data;
+
+	if (wifi_callbacks.specific_scan_cb != NULL)
+		wifi_callbacks.specific_scan_cb(error_code, wifi_callbacks.specific_scan_user_data);
+
+	wifi_callbacks.specific_scan_cb = NULL;
+	wifi_callbacks.specific_scan_user_data = NULL;
+
+	return FALSE;
+}
+
 static gboolean __bgscan_cb_idle(gpointer data)
 {
 	wifi_error_e error_code = (wifi_error_e)data;
@@ -444,6 +505,24 @@ static void __libnet_scan_cb(net_event_info_t *event_cb, bool is_requested)
 
 	if (wifi_callbacks.bg_scan_cb != NULL)
 		_wifi_callback_add(__bgscan_cb_idle, (gpointer)error_code);
+}
+
+static void __libnet_specific_scan_cb(net_event_info_t *event_cb)
+{
+	wifi_error_e error_code = WIFI_ERROR_NONE;
+
+	__libnet_clear_profile_list(&specific_profile_iterator);
+
+	if (event_cb->Error != NET_ERR_NONE) {
+		WIFI_LOG(WIFI_ERROR, "Specific scan failed!, Error [%d]\n", event_cb->Error);
+		error_code = WIFI_ERROR_OPERATION_FAILED;
+	} else if (event_cb->Data) {
+		GSList *ap_list = (GSList *)event_cb->Data;
+		__libnet_update_specific_profile_iterator(ap_list);
+	}
+
+	if (wifi_callbacks.specific_scan_cb != NULL)
+		_wifi_callback_add(__specific_scan_cb_idle, (gpointer)error_code);
 }
 
 static void __libnet_set_connected_cb(wifi_connected_cb user_cb, void *user_data)
@@ -596,7 +675,7 @@ static void __libnet_evt_cb(net_event_info_t *event_cb, void *user_data)
 
 		net_state_type_t *profile_state = (net_state_type_t *)event_cb->Data;
 		wifi_connection_state_e ap_state = _wifi_convert_to_ap_state(*profile_state);
-		
+
 		WIFI_LOG(WIFI_INFO, "state: %s", __libnet_convert_ap_state_to_string(ap_state));
 		SECURE_WIFI_LOG(WIFI_INFO, "profile name: %s", event_cb->ProfileName);
 
@@ -625,6 +704,13 @@ static void __libnet_evt_cb(net_event_info_t *event_cb, void *user_data)
 	case NET_EVENT_WIFI_SCAN_RSP:
 	case NET_EVENT_WIFI_SCAN_IND:
 		__libnet_scan_cb(event_cb, is_requested);
+		break;
+	case NET_EVENT_SPECIFIC_SCAN_RSP:
+		WIFI_LOG(WIFI_INFO, "Got Wi-Fi specific scan RSP\n");
+		break;
+	case NET_EVENT_SPECIFIC_SCAN_IND:
+		WIFI_LOG(WIFI_INFO, "Got Wi-Fi specific scan IND\n");
+		__libnet_specific_scan_cb(event_cb);
 		break;
 	case NET_EVENT_WIFI_POWER_RSP:
 		is_requested = true;
@@ -726,6 +812,9 @@ bool _wifi_libnet_check_ap_validity(wifi_ap_h ap_h)
 	for (i = 0; i < profile_iterator.count; i++)
 		if (ap_h == &profile_iterator.profiles[i]) return true;
 
+	for (i = 0; i < specific_profile_iterator.count; i++)
+		if (ap_h == &specific_profile_iterator.profiles[i]) return true;
+
 	return false;
 }
 
@@ -784,42 +873,41 @@ int _wifi_libnet_get_wifi_device_state(wifi_device_state_e *device_state)
 	return WIFI_ERROR_NONE;
 }
 
-int _wifi_libnet_get_wifi_state(wifi_connection_state_e* connection_state)
+int _wifi_libnet_get_wifi_state(wifi_connection_state_e *connection_state)
 {
-	int rv;
-	net_wifi_state_t wlan_state = 0;
-	net_profile_name_t profile_name;
+	wifi_dbus *dbus_h = NULL;
+	GError *error = NULL;
+	GVariant *result = NULL;
+	gint state = 0;
 
-	rv = net_get_wifi_state(&wlan_state, &profile_name);
-	if (rv == NET_ERR_ACCESS_DENIED) {
-		WIFI_LOG(WIFI_ERROR, "Access denied");
-		return WIFI_ERROR_PERMISSION_DENIED;
-	} else if (rv != NET_ERR_NONE) {
-		WIFI_LOG(WIFI_ERROR, "Failed to get Wi-Fi state");
+	dbus_h = _wifi_get_dbus_handle();
+	if (dbus_h == NULL) {
+		WIFI_LOG(WIFI_ERROR, "Not initialized for wifi dbus connection");
+		return WIFI_ERROR_INVALID_OPERATION;
+	}
+
+	result = g_dbus_connection_call_sync(dbus_h->dbus_conn,
+					     NETCONFIG_SERVICE,
+					     NETCONFIG_WIFI_PATH,
+					     NETCONFIG_IWIFI,
+					     "GetWifiState",
+					     g_variant_new("()"),
+					     NULL, G_DBUS_CALL_FLAGS_NONE,
+					     DBUS_REPLY_TIMEOUT, dbus_h->ca,
+					     &error);
+
+	if (error) {
+		WIFI_LOG(WIFI_ERROR, "Fail to GetWifiState [%d: %s]", error->code, error->message);
+		g_error_free(error);
 		return WIFI_ERROR_OPERATION_FAILED;
 	}
 
-	switch (wlan_state) {
-	case WIFI_OFF:
-	case WIFI_ON:
-		*connection_state = WIFI_CONNECTION_STATE_DISCONNECTED;
-		break;
-	case WIFI_ASSOCIATION:
-		*connection_state = WIFI_CONNECTION_STATE_ASSOCIATION;
-		break;
-	case WIFI_CONFIGURATION:
-		*connection_state = WIFI_CONNECTION_STATE_CONFIGURATION;
-		break;
-	case WIFI_CONNECTED:
-		*connection_state = WIFI_CONNECTION_STATE_CONNECTED;
-		break;
-	case WIFI_DISCONNECTING:
-		*connection_state = WIFI_CONNECTION_STATE_CONNECTED;
-		break;
-	default :
-		WIFI_LOG(WIFI_ERROR, "Unknown state");
-		return WIFI_ERROR_OPERATION_FAILED;
+	if (result != NULL) {
+		g_variant_get(result, "(i)", &state);
+		g_variant_unref(result);
 	}
+
+	*connection_state = state;
 
 	return WIFI_ERROR_NONE;
 }
@@ -856,6 +944,25 @@ int _wifi_libnet_scan_request(wifi_scan_finished_cb callback, void *user_data)
 	if (rv == NET_ERR_NONE) {
 		wifi_callbacks.scan_request_cb = callback;
 		wifi_callbacks.scan_request_user_data = user_data;
+		return WIFI_ERROR_NONE;
+	} else if (rv == NET_ERR_ACCESS_DENIED) {
+		WIFI_LOG(WIFI_ERROR, "Access denied");
+		return WIFI_ERROR_PERMISSION_DENIED;
+	} else if (rv == NET_ERR_INVALID_OPERATION)
+		return WIFI_ERROR_INVALID_OPERATION;
+
+	return WIFI_ERROR_OPERATION_FAILED;
+}
+
+int _wifi_libnet_scan_specific_ap(const char *essid,
+                                       wifi_scan_finished_cb callback, void *user_data)
+{
+	int rv;
+    rv = net_specific_scan_wifi(essid);
+
+    if (rv == NET_ERR_NONE) {
+		g_strlcpy(specific_profile_essid, essid, NET_WLAN_ESSID_LEN+1);
+		__libnet_set_specific_scan_cb(callback, user_data);
 		return WIFI_ERROR_NONE;
 	} else if (rv == NET_ERR_ACCESS_DENIED) {
 		WIFI_LOG(WIFI_ERROR, "Access denied");
@@ -921,6 +1028,42 @@ int _wifi_libnet_foreach_found_aps(wifi_found_ap_cb callback, void *user_data)
 			continue;
 
 		rv = callback((wifi_ap_h)(&profile_iterator.profiles[i]), user_data);
+		if (rv == false) break;
+	}
+
+	return WIFI_ERROR_NONE;
+}
+
+int _wifi_libnet_foreach_found_specific_aps(wifi_found_ap_cb callback, void *user_data)
+{
+	int i, rv;
+
+	if (specific_profile_iterator.count == 0) {
+		WIFI_LOG(WIFI_WARN, "There is no specific APs");
+
+		rv = __libnet_update_profile_iterator();
+		if (rv == NET_ERR_ACCESS_DENIED) {
+			WIFI_LOG(WIFI_ERROR, "Access denied");
+			return WIFI_ERROR_PERMISSION_DENIED;
+		}
+
+		if (profile_iterator.count == 0) {
+			WIFI_LOG(WIFI_WARN, "There is no APs");
+			return WIFI_ERROR_NONE;
+		}
+
+		for (i = 0; i < profile_iterator.count; i++) {
+			if (!g_strcmp0(specific_profile_essid,
+						profile_iterator.profiles[i].ProfileInfo.Wlan.essid)) {
+				rv = callback((wifi_ap_h)(&profile_iterator.profiles[i]), user_data);
+				if (rv == false) break;
+			}
+		}
+		return WIFI_ERROR_NONE;
+	}
+
+	for (i = 0; i < specific_profile_iterator.count; i++) {
+		rv = callback((wifi_ap_h)(&specific_profile_iterator.profiles[i]), user_data);
 		if (rv == false) break;
 	}
 
@@ -1190,4 +1333,58 @@ void _wifi_callback_cleanup(void)
 
 	g_slist_free(managed_idler_list);
 	managed_idler_list = NULL;
+}
+
+int _wifi_check_feature_supported(const char *feature_name)
+{
+	if(is_feature_checked) {
+		if(!feature_supported) {
+			LOGE("%s feature is disabled", feature_name);
+			return WIFI_ERROR_NOT_SUPPORTED;
+		}
+	}
+	else {
+		if (!system_info_get_platform_bool(feature_name, &feature_supported)) {
+			is_feature_checked = true;
+			if (!feature_supported) {
+				LOGE("%s feature is disabled", feature_name);
+				return WIFI_ERROR_NOT_SUPPORTED;
+			}
+		}
+		else {
+			LOGE("Error - Feature getting from System Info");
+			return WIFI_ERROR_OPERATION_FAILED;
+		}
+	}
+
+	return WIFI_ERROR_NONE;
+}
+
+int _wifi_dbus_init(void)
+{
+	int rv;
+
+	rv = wifi_dbus_init(&g_dbus_h);
+	if (rv != NET_ERR_NONE)
+		return rv;
+
+	return NET_ERR_NONE;
+}
+
+int _wifi_dbus_deinit(void)
+{
+	wifi_dbus_deinit(g_dbus_h);
+	g_dbus_h = NULL;
+
+	return NET_ERR_NONE;
+}
+
+wifi_dbus *_wifi_get_dbus_handle(void)
+{
+	if (g_dbus_h == NULL) {
+		WIFI_LOG(WIFI_ERROR, "g_dbus_h is NULL");
+		return NULL;
+	}
+
+	return g_dbus_h;
 }

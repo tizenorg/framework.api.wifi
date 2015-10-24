@@ -3,13 +3,15 @@ SET(fw_name "capi-network-wifi")
 
 PROJECT(${fw_name})
 
-SET(CMAKE_INSTALL_PREFIX /usr)
 SET(PREFIX ${CMAKE_INSTALL_PREFIX})
+
+SET(LIB ${LIB_PATH})
+SET(LIBDIR ${PREFIX}/${LIB_PATH})
 
 SET(INC_DIR include)
 INCLUDE_DIRECTORIES(${INC_DIR})
 
-SET(dependents "dlog vconf capi-base-common glib-2.0 network capi-system-info")
+SET(dependents "dlog vconf capi-base-common capi-system-info glib-2.0 gio-2.0 gthread-2.0 network ")
 SET(pc_dependents "capi-base-common")
 
 IF(TIZEN_DUALSIM_ENABLE)
@@ -22,13 +24,18 @@ IF(TIZEN_MOBILE)
 	ADD_DEFINITIONS(-DTIZEN_MOBILE)
 ENDIF(TIZEN_MOBILE)
 
+IF(TIZEN_TV)
+	ADD_DEFINITIONS(-DTIZEN_TV)
+ENDIF(TIZEN_TV)
+
 INCLUDE(FindPkgConfig)
 pkg_check_modules(${fw_name} REQUIRED ${dependents} ${APPFW_REQUIRED_PKGS})
 FOREACH(flag ${${fw_name}_CFLAGS})
     SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
 ENDFOREACH(flag)
 
-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -fPIC -Wall -Werror -fvisibility=hidden")
+#SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -fPIC -Wall -Werror -fvisibility=hidden")
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -fPIC -Wall")
 SET(CMAKE_C_FLAGS_DEBUG "-O0 -g")
 
 IF("${ARCH}" STREQUAL "arm")
@@ -38,7 +45,7 @@ ENDIF("${ARCH}" STREQUAL "arm")
 ADD_DEFINITIONS("-DPREFIX=\"${CMAKE_INSTALL_PREFIX}\"")
 ADD_DEFINITIONS("-DTIZEN_DEBUG")
 
-SET(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed -Wl,--rpath=/usr/lib")
+SET(CMAKE_EXE_LINKER_FLAGS "-Wl,--as-needed -Wl,--rpath=${LIBDIR}")
 
 aux_source_directory(src SOURCES)
 ADD_LIBRARY(${fw_name} SHARED ${SOURCES})
@@ -52,7 +59,7 @@ SET_TARGET_PROPERTIES(${fw_name}
      CLEAN_DIRECT_OUTPUT 1
 )
 
-INSTALL(TARGETS ${fw_name} DESTINATION lib)
+INSTALL(TARGETS ${fw_name} DESTINATION ${LIB})
 INSTALL(
         DIRECTORY ${INC_DIR}/ DESTINATION include/network
         FILES_MATCHING
@@ -69,7 +76,7 @@ CONFIGURE_FILE(
     ${CMAKE_CURRENT_SOURCE_DIR}/${fw_name}.pc
     @ONLY
 )
-INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/${fw_name}.pc DESTINATION lib/pkgconfig)
+INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/${fw_name}.pc DESTINATION ${LIB}/pkgconfig)
 
 ADD_SUBDIRECTORY(test)
 
