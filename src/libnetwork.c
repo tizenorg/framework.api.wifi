@@ -1335,6 +1335,34 @@ void _wifi_callback_cleanup(void)
 	managed_idler_list = NULL;
 }
 
+int _wifi_libnet_check_get_privilege()
+{
+	int rv;
+
+	rv = net_check_get_privilege();
+	if (rv == NET_ERR_ACCESS_DENIED) {
+		WIFI_LOG(WIFI_ERROR, "Access denied");
+		return WIFI_ERROR_PERMISSION_DENIED;
+	} else if (rv != NET_ERR_NONE)
+		return WIFI_ERROR_OPERATION_FAILED;
+
+	return WIFI_ERROR_NONE;
+}
+
+int _wifi_libnet_check_profile_privilege()
+{
+	int rv;
+
+	rv = net_check_profile_privilege();
+	if (rv == NET_ERR_ACCESS_DENIED) {
+		WIFI_LOG(WIFI_ERROR, "Access denied");
+		return WIFI_ERROR_PERMISSION_DENIED;
+	} else if (rv != NET_ERR_NONE)
+		return WIFI_ERROR_OPERATION_FAILED;
+
+	return WIFI_ERROR_NONE;
+}
+
 int _wifi_check_feature_supported(const char *feature_name)
 {
 	if(is_feature_checked) {
