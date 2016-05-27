@@ -1191,3 +1191,29 @@ void _wifi_callback_cleanup(void)
 	g_slist_free(managed_idler_list);
 	managed_idler_list = NULL;
 }
+
+int _wifi_libnet_check_get_privilege()
+{
+	int rv;
+
+	rv = net_check_get_privilege();
+	if (rv == NET_ERR_ACCESS_DENIED) {
+		WIFI_LOG(WIFI_ERROR, "Access denied"); //LCOV_EXCL_LINE
+		return WIFI_ERROR_PERMISSION_DENIED; //LCOV_EXCL_LINE
+	} else if (rv != NET_ERR_NONE)
+		return WIFI_ERROR_OPERATION_FAILED; //LCOV_EXCL_LINE
+
+	return WIFI_ERROR_NONE;
+}
+
+int _wifi_libnet_check_profile_privilege()
+{
+	int rv = net_check_profile_privilege();
+	if (rv == NET_ERR_ACCESS_DENIED) {
+		WIFI_LOG(WIFI_ERROR, "Access denied"); //LCOV_EXCL_LINE
+		return WIFI_ERROR_PERMISSION_DENIED; //LCOV_EXCL_LINE
+	} else if (rv != NET_ERR_NONE)
+		return WIFI_ERROR_OPERATION_FAILED; //LCOV_EXCL_LINE
+
+	return WIFI_ERROR_NONE;
+}
